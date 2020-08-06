@@ -1,0 +1,88 @@
+"""
+################################################################################
+## Get Hook names modified in the last X days
+##  - Tested on CB versions:  7.1 and 9.2.1
+##  - as root on CB run '/opt/cloudbolt/manage.py shell_plus' then copy/paste
+################################################################################
+"""
+from __future__ import print_function
+import os
+import re
+import datetime as dt
+# from cbhooks.models import CloudBoltHook, RemoteScriptHook
+# from django.conf import settings
+
+
+BASE_PATH = '/var/www/html/cloudbolt/static/uploads/'
+DAYS_AGO = 65
+DEBUG = False
+
+NOW = dt.datetime.now()
+THEN = NOW-dt.timedelta(days=DAYS_AGO)
+
+# Get a dictionary of files modified after X Days ago
+PATTERN = r'_[a-zA-Z0-9]{7}\.'
+MODIFIED_FILES = {}
+
+print("CloudBolt Objects modified after: {}\n".format(THEN))
+for root, dirs, files in os.walk(BASE_PATH):
+    for fname in sorted(files, reverse=True):
+        path = os.path.join(root, fname)
+        st = os.stat(path)
+        mtime = dt.datetime.fromtimestamp(st.st_mtime)
+        if mtime > THEN:
+            if DEBUG:
+                print("\n{}:\n{: >10}: {}".format(mtime, "filename", fname))
+                print("{: >10}: {}/".format("location", root))
+            file = fname.split('.')[0]
+            if re.findall(PATTERN, fname):
+                base_file = re.sub(PATTERN, '.', fname)
+            else:
+                base_file = fname
+            if DEBUG and (base_file != fname):
+                print("{: >10}: {}".format("basename", base_file))
+            if base_file not in MODIFIED_FILES.keys():
+                MODIFIED_FILES[base_file] = {
+                    "filename": fname,
+                    "fqfn": path,
+                    "mtime": mtime
+                    }
+            else:
+                if MODIFIED_FILES[base_file]["mtime"] < mtime:
+                    isnewer = True
+                    MODIFIED_FILES[base_file] = {
+                        "filename": fname,
+                        "fqfn": path,
+                        "mtime": mtime}
+                else:
+                    isnewer = False
+                if DEBUG:
+                    print("{: >10}: {}".format("Newer", str(isnewer)))
+
+# Grab just the modified files of type 'hook' and pull the name and type
+#  .. to use to go into the UI and pull the latest content manually (for now)
+MODIFIED = [MODIFIED_FILES[s]['fqfn'] for s in MODIFIED_FILES]
+IDENTIFIED = []
+OBJECTS = list(CloudBoltHook.objects.all()) + list(RemoteScriptHook.objects.all())
+for cbObj in OBJECTS:
+    objName = cbObj.name
+    objType = cbObj.hook_type_label
+    if settings.VERSION_INFO['VERSION'].startswith('7'):
+        if cbObj.hook_type_label == 'CloudBolt Plug-in':
+            fPath = cbObj.get_abs_module_path()
+        elif cbObj.hook_type_label == 'Remote Script':
+            fPath = cbObj.get_abs_script_path()
+    else:
+        fPath = cbObj.get_abs_file_path()
+    if fPath in MODIFIED:
+        print("[ {: <18} ]: '{}'".format(objType, objName))
+        IDENTIFIED.append(fPath)
+        if DEBUG:
+            print("{: >10}: {}".format("FQFN", fPath))
+
+if DEBUG:
+    # Other items such as BluePrint Icon or deleted plugins may exist
+    DIGMORE = set(MODIFIED).difference(IDENTIFIED)
+    print("\nModified Files with undetected association:")
+    for fName in DIGMORE:
+        print("   {}".format(fName))
